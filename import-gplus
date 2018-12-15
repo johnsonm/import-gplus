@@ -325,9 +325,12 @@ ${comments}
 
 for post in jsonMap:
     p = jsonMap[post]
-    title, text = formatPost(p)
+    # you can separate out into public and private blogs by choosing whether to continue
+    # in each branch, and only referenced files will be created in the images directory
     if 'postAcl' in p and 'isPublic' in p['postAcl'] and p['postAcl']['isPublic']:
         directory = '_posts/'
     else:
+        continue
         directory = '_drafts/'
+    title, text = formatPost(p)
     codecs.open(directory+title+'.md', 'w', 'utf-8').write(text)
