@@ -1,0 +1,333 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+# This is a really quick and dirty converter from a G+ takeout to
+# a jekyll blog site that has just enough to work well enough for
+# my own purposes.  I built it line by line as just barely enough of
+# a research projet (not even really a prototype) to understand
+# the data and as soon as I made it work for me I stopped and used it
+# as a one-shot.  Some of its assumptions will only be relevant to
+# my own G+ takeout and I don't know which those are...
+
+# Basically, there is very little chance that this will work for you
+# in any way as it stands. It barely works for me. If you don't know
+# Python and regular expressions you don't have much chance.  I have
+# not looked at which of the python modules I used are in the standard
+# library and which aren't.
+
+# Copyright Michael K Johnson
+# You may use any part of this under the Creative Commons Attribution 4.0 International (CC BY 4.0) License
+# https://creativecommons.org/licenses/by/4.0/
+
+# Usage:
+# cd /path/to/jekyll/base/dir
+# import-gplus /path/to/GooglePlusTakeout
+
+# then start fixing whatever breaks, some of which you might not notice.
+
+# If you have links to youtube, add the file _includes/youtubePlayer.html containing:
+#     <iframe width="560" height="315" src="https://www.youtube.com/embed/{{ include.id }}" frameborder="0" allowfullscreen></iframe>
+# or equivalent
+
+import codecs
+import csv
+import dateutil.parser
+import json
+import locale
+import os
+import re
+import sys
+import urllib2
+import urlparse
+import yaml
+
+from string import Template
+
+import epdb
+sys.excepthook = epdb.excepthook()
+
+sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
+
+hashtagsRe = re.compile(r' ?<a rel="nofollow" class="[^"]*ot-hashtag[^"]*" href="[^"]*/%23[^/]*/posts" ?>#([^/]*)</a> ?')
+clickRe = re.compile(r' ?jslog="[^"]*"*track:click" ?')
+linkRe = re.compile(r'<a rel=[^>]*href="([^"]*)"[^>]*>([^<]*)</a>')
+proflinkRe = re.compile(r'<span class="proflinkWrapper">[^+]*\+[^>]*><a class="[^>]*>([^<]*)</a></span>')
+italicRe = re.compile(r'<i>([^<]*)</i>')
+boldRe = re.compile(r'<b>([^<]*)</b>')
+delRe = re.compile(r' ?<del>([^<]*)</del> ?') # used only to plainify
+extraNLRe = re.compile(r'\n\n\n*')
+youtubeRe = re.compile(r'https?://(?:www\.)?youtu(?:be\.com|\.be)/(?:watch\?v=|v/)?([^?]*)')
+
+fileMetadataCSVs = []
+metadataCSVs = []
+CSVs = []
+images = []
+JSONs = []
+PostJSONs = []
+
+urlMap = {}
+jsonMap = {}
+noExtMap = {}
+allPathMap = {}
+
+for root, dirs, files in os.walk(sys.argv[1]):
+    for f in files:
+        fullPath = '/'.join((root, f))
+        allPathMap[fullPath] = True
+        if f.endswith('.metadata.csv'):
+            fileMetadataCSVs.append(fullPath)
+        elif f == 'metadata.csv':
+            CSVs.append(fullPath)
+        elif f.endswith('.csv'):
+            CSVs.append(fullPath)
+        elif '/Posts' in root and f.endswith('.json'):
+            PostJSONs.append(fullPath)
+        elif f.endswith('.json'):
+            JSONs.append(fullPath)
+        noExtMap[fullPath.rsplit(".", 1)[0]] = fullPath
+
+def stableImageURL(u):
+    path = urlparse.urlparse(u).path
+    path = path.split('/')
+    path = path[1:3] # These two path components are the only unique ID; based on my takeout
+    return '/'.join(path)
+
+for c in fileMetadataCSVs:
+    with open(c, 'rb') as csvfile:
+        d = csv.DictReader(csvfile)
+        for row in d:
+            if 'url' in row:
+                stableUrl = stableImageURL(row['url'])
+                if stableUrl in urlMap and row['title'] != urlMap[stableUrl]['title']:
+                    epdb.st()
+                fileName = c.split('.metadata.csv')[0]
+                row['filename'] = fileName
+                row['metadata_filename'] = c
+                urlMap[stableUrl] = row
+
+for j in PostJSONs:
+    with open(j, 'rb') as jsonfile:
+        d = json.load(jsonfile)
+        jsonMap[j] = d
+
+def markdownSafe(text):
+    return text.replace('|', '&#x7c;')
+
+def URL(u, text=None):
+    y = youtubeRe.match(u)
+    if y:
+        if text == None:
+            text = y.group(1)
+        return '{% include youtubePlayer.html id=' + y.group(1) + ' %}\n[' + markdownSafe(text) + '](' + u + ')'
+    if 'googleusercontent' not in u:
+        if text == None:
+            text = urlparse.urlparse(u).path
+        return '[' + markdownSafe(text) + '](' + u + ')'
+    s = stableImageURL(u)
+    if s in urlMap:
+        fileName = urlMap[s]['filename']
+        if fileName not in allPathMap:
+            fileName = noExtMap[fileName]
+        baseName = os.path.basename(fileName)
+        imagePath = 'images/' + baseName
+        if not os.path.exists(imagePath):
+            open(imagePath, 'wb').write(open(fileName, 'rb').read())
+    else:
+        # I wish there was metadata for image type, but...
+        baseName = os.path.basename(u)
+        jpgImagePath = 'images/' + baseName + '.jpg'
+        pngImagePath = 'images/' + baseName + '.jpg'
+        gifImagePath = 'images/' + baseName + '.gif'
+        # we assume if we found them we know type
+        if os.path.exists(jpgImagePath):
+            imagePath = jpgImagePath
+        elif os.path.exists(pngImagePath):
+            imagePath = pngImagePath
+        elif os.path.exists(gifImagePath):
+            imagePath = gifImagePath
+        else:
+            # these URLs are pretty dirty in the source...
+            if u.startswith('//'):
+                u = 'https:' + u
+            try:
+                data = urllib2.urlopen(u)
+            except:
+                return 'Google lost image data, sorry!'
+            code = data.getcode()
+            if code != 200:
+                return 'Google lost image data, sorry!'
+            info = data.info()
+            extension = {
+                'image/jpeg': '.jpg',
+                'image/png': '.png',
+                'image/gif': '.gif',
+            }[info.getheader('Content-Type')]
+            imagePath = 'images/' + baseName + extension
+            open(imagePath, 'wb').write(data.read())
+    return '![markdownSafe(%s)](/%s)' %(baseName, imagePath)
+
+def subUrl(m):
+    return URL(m.group(1), m.group(2))
+
+def markdown(s, plain=False):
+    s = re.sub(hashtagsRe, r' #\1 ', s)
+    s = re.sub(clickRe, ' ', s)
+    s = re.sub(proflinkRe, r'+\1', s)
+    if plain:
+        s = re.sub(linkRe, r'\2', s)
+    else:
+        s = re.sub(linkRe, subUrl, s)
+    if plain:
+        s = re.sub(italicRe, r'\1', s)
+        s = re.sub(boldRe, r'\1', s)
+        s = re.sub(delRe, ' ', s)
+    else:
+        s = re.sub(italicRe, r'*\1*', s)
+        s = re.sub(boldRe, r'**\1**', s)
+    return s.replace('<br>', '\n\n').replace('&#39;', "'").replace('&quot;', '"')
+
+def formatLink(p):
+    if 'link' in p:
+        return URL(p['link']['url'], p['link']['title'])
+    return ''
+
+def formatAuthor(p):
+    s = Template('''
+### **${displayName}** ${creationTime}
+''')
+    displayName = 'Google System...'
+    if 'displayName' in p['author']:
+        displayName = p['author']['displayName']
+    creationTime = ''
+    if 'creationTime' in p:
+        dt = dateutil.parser.parse(p['creationTime'])
+        creationTime = '*' + dt.strftime('%B %d, %Y %H:%M') + '*'
+    return s.substitute(locals())
+
+def formatMedia(p):
+    media = ''
+    if 'media' in p:
+        if 'url' in p['media']:
+            media = URL(p['media']['url'])
+        else:
+            media = '\n\n'.join([URL(x['url']) for x in p['media']])
+    return media
+
+def formatComment(c):
+    s = Template('''
+${author}
+${content}
+${media}
+${link}
+''')
+    author = formatAuthor(c)
+    content = ''
+    if 'content' in c:
+        content = markdown(c['content'])
+    media = formatMedia(c)
+    link = formatLink(c)
+    return s.substitute(locals())
+
+def formatComments(p):
+    if 'comments' in p and len(p['comments']) > 0:
+        return '---\n' + '\n'.join(formatComment(c) for c in p['comments'])
+    return ''
+
+def formatPostContent(p):
+    s = Template('''${content}
+
+${media}
+
+${link}
+
+${resharedPost}
+''')
+    content = ''
+    if 'content' in p:
+        content = markdown(p['content'])
+    if 'album' in p:
+        content += '\n'
+        content += formatMedia(p['album'])
+    media = formatMedia(p)
+    link = ''
+    if 'link' in p:
+        link = formatLink(p)
+    resharedPost = ''
+    if 'resharedPost' in p:
+        resharedPost = formatAuthor(p['resharedPost'])
+        resharedContent = formatPostContent(p['resharedPost']).split('\n')
+        while len(resharedContent[-1]) == 0:
+            resharedContent.pop(-1)
+        resharedPost += '\n'.join(['> '+x for x in resharedContent])
+    return re.sub(extraNLRe, '\n\n', s.substitute(locals()))
+
+def formatPost(p):
+    s = Template('''---
+${frontmatter}
+---
+${post}
+${comments}
+
+---
+*Imported from Google+ &mdash; content and formatting may not be reliable*
+''')
+    dt = dateutil.parser.parse(p['creationTime'])
+    niceTime = dt.strftime('%B %d, %Y %H:%M')
+    content = ''
+    if 'content' in p:
+        content = p['content']
+    elif 'resharedPost' in p and 'content' in p['resharedPost']:
+        content = p['resharedPost']['content']
+    titleWords = []
+    if len(content):
+        titleWords = [x.strip() for x in markdown(content, plain=True).split('\n') if x.strip()]
+        titleWords = [x for x in titleWords if not x.startswith('http')]
+
+    if len(titleWords):
+        titleWords = titleWords[0].split()
+        if len(titleWords) > 10:
+            # long titles will be cut off at end of first sentence after first few words
+            for i in range(6, len(titleWords)):
+                endPunct = ('.', '?', ';', '!')
+                if titleWords[i][-1] in endPunct:
+                    break
+                if titleWords[i][-1] in ('"', "'") and titleWords[i][-2] in endPunct:
+                    break
+            titleWords = titleWords[0:i+1]
+        if titleWords[-1][-1] == '.' and len(titleWords[-1]) > 1 and titleWords[-1][-2] != '.':
+            # cut off final '.' but not elipsis
+            titleWords[-1] = titleWords[-1][:-1]
+        title = ' '.join(titleWords)
+        # too long doesn't fit
+        while len(title) > 225:
+            titleWords.pop(-1)
+            title = ' '.join(titleWords)
+    elif 'album' in p:
+        title = 'Album from ' + niceTime + '...\n'
+        titleWords = ['Album', 'from', 'Google+']
+    else:
+        title = 'Shared on ' + niceTime + '...\n'
+        titleWords = ['Shared', 'on', 'Google+']
+    titleWords = [
+        ''.join([x if x.isalnum() or x in ('-', '_') else '_' for x in word])
+        for word in titleWords
+    ]
+    date = p['creationTime']
+    frontmatter = yaml.dump({
+        'layout': 'post',
+        'title': title,
+        'date': date,
+    })
+    dt = dateutil.parser.parse(date)
+    post = formatPostContent(p)
+    comments = formatComments(p)
+    return '-'.join((dt.strftime('%Y-%m-%d'), '-'.join(titleWords))), re.sub(extraNLRe, '\n\n', s.substitute(locals()))
+
+for post in jsonMap:
+    p = jsonMap[post]
+    title, text = formatPost(p)
+    if 'postAcl' in p and 'isPublic' in p['postAcl'] and p['postAcl']['isPublic']:
+        directory = '_posts/'
+    else:
+        directory = '_drafts/'
+    codecs.open(directory+title+'.md', 'w', 'utf-8').write(text)
