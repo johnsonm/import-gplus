@@ -129,15 +129,15 @@ def URL(u, text=None):
         if fileName not in allPathMap:
             fileName = noExtMap[fileName]
         baseName = os.path.basename(fileName)
-        imagePath = 'images/' + baseName
+        imagePath = 'images/gplus/' + baseName
         if not os.path.exists(imagePath):
             open(imagePath, 'wb').write(open(fileName, 'rb').read())
     else:
         # I wish there was metadata for image type, but...
         baseName = os.path.basename(u)
-        jpgImagePath = 'images/' + baseName + '.jpg'
-        pngImagePath = 'images/' + baseName + '.jpg'
-        gifImagePath = 'images/' + baseName + '.gif'
+        jpgImagePath = 'images/gplus/' + baseName + '.jpg'
+        pngImagePath = 'images/gplus/' + baseName + '.jpg'
+        gifImagePath = 'images/gplus/' + baseName + '.gif'
         # we assume if we found them we know type
         if os.path.exists(jpgImagePath):
             imagePath = jpgImagePath
@@ -162,7 +162,7 @@ def URL(u, text=None):
                 'image/png': '.png',
                 'image/gif': '.gif',
             }[info.getheader('Content-Type')]
-            imagePath = 'images/' + baseName + extension
+            imagePath = 'images/gplus/' + baseName + extension
             open(imagePath, 'wb').write(data.read())
     return '![markdownSafe(%s)](/%s)' %(baseName, imagePath)
 
