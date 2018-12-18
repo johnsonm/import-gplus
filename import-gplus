@@ -164,7 +164,7 @@ def URL(u, text=None):
             }[info.getheader('Content-Type')]
             imagePath = 'images/gplus/' + baseName + extension
             open(imagePath, 'wb').write(data.read())
-    return '![markdownSafe(%s)](/%s)' %(baseName, imagePath)
+    return '![%s](/%s)' %(markdownSafe(baseName), imagePath)
 
 def subUrl(m):
     return URL(m.group(1), m.group(2))
