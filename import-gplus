@@ -206,12 +206,15 @@ def formatAuthor(p):
 
 def formatMedia(p):
     media = ''
+    mediaList = []
     if 'media' in p:
         if 'url' in p['media']:
             media = URL(p['media']['url'])
+            mediaList = [media]
         else:
-            media = '\n\n'.join([URL(x['url']) for x in p['media']])
-    return media
+            mediaList = [URL(x['url']) for x in p['media']]
+            media = '\n\n'.join(mediaList)
+    return media, mediaList
 
 def formatComment(c):
     s = Template('''
@@ -224,7 +227,7 @@ ${link}
     content = ''
     if 'content' in c:
         content = markdown(c['content'])
-    media = formatMedia(c)
+    media, _ = formatMedia(c)
     link = formatLink(c)
     return s.substitute(locals())
 
@@ -243,12 +246,16 @@ ${link}
 ${resharedPost}
 ''')
     content = ''
+    mediaList = []
     if 'content' in p:
         content = markdown(p['content'])
     if 'album' in p:
         content += '\n'
-        content += formatMedia(p['album'])
-    media = formatMedia(p)
+        albumContent, albumMedia = formatMedia(p['album'])
+        content += albumContent
+        mediaList.append(albumMedia)
+    media, postMediaList = formatMedia(p)
+    mediaList.append(postMediaList)
     link = ''
     if 'link' in p:
         link = formatLink(p)
@@ -263,7 +270,9 @@ ${resharedPost}
 
 def formatPost(p):
     s = Template('''---
-${frontmatter}
+layout: post
+title: ${title}
+date: ${date}
 ---
 ${post}
 ${comments}
@@ -273,6 +282,8 @@ ${comments}
 ''')
     dt = dateutil.parser.parse(p['creationTime'])
     niceTime = dt.strftime('%B %d, %Y %H:%M')
+    endPunct = ('.', '?', ';', '!')
+    quotes = ('"', "'", u'`', u'´')
     content = ''
     if 'content' in p:
         content = p['content']
@@ -284,11 +295,11 @@ ${comments}
         titleWords = [x for x in titleWords if not x.startswith('http')]
 
     if len(titleWords):
-        titleWords = titleWords[0].split()
+        titleWords = titleWords[0]
+        titleWords = titleWords.split()
         if len(titleWords) > 10:
             # long titles will be cut off at end of first sentence after first few words
             for i in range(6, len(titleWords)):
-                endPunct = ('.', '?', ';', '!')
                 if titleWords[i][-1] in endPunct:
                     break
                 if titleWords[i][-1] in ('"', "'") and titleWords[i][-2] in endPunct:
@@ -308,17 +319,18 @@ ${comments}
     else:
         title = 'Shared on ' + niceTime + '...\n'
         titleWords = ['Shared', 'on', 'Google+']
+    for quote in quotes:
+        titleWords = [x.replace(quote, '') for x in titleWords]
     titleWords = [
         ''.join([x if x.isalnum() or x in ('-', '_') else '_' for x in word])
         for word in titleWords
     ]
+    titleWords = [x.strip('_') for x in titleWords]
+    titleWords = [x for x in titleWords if x and x != '-']
     date = p['creationTime']
-    frontmatter = yaml.dump({
-        'layout': 'post',
-        'title': title,
-        'date': date,
-    })
     dt = dateutil.parser.parse(date)
+    date = yaml.dump(date, encoding='utf-8')
+    title = yaml.dump(title, encoding='utf-8')
     post = formatPostContent(p)
     comments = formatComments(p)
     return '-'.join((dt.strftime('%Y-%m-%d'), '-'.join(titleWords))), re.sub(extraNLRe, '\n\n', s.substitute(locals()))
